@@ -1,3 +1,4 @@
+
 import React, { createContext, useState, useEffect, useContext } from 'react';
 import { chatService } from '../services/chatService';
 import { SocketContext } from './SocketContext';
@@ -8,8 +9,10 @@ export const ChatProvider = ({ children }) => {
     const [chats, setChats] = useState([]);
     const [activeChat, setActiveChat] = useState(null);
     const [contacts, setContacts] = useState([]);
+
     const { lastMessage } = useContext(SocketContext);
 
+    // Load chats and contacts
     useEffect(() => {
         loadInitialData();
     }, []);
@@ -18,6 +21,7 @@ export const ChatProvider = ({ children }) => {
         try {
             const chatData = await chatService.getChats();
             setChats(chatData);
+
             const contactData = await chatService.getContacts();
             setContacts(contactData);
         } catch (err) {
@@ -25,54 +29,84 @@ export const ChatProvider = ({ children }) => {
         }
     };
 
-    // Listen to WebSocket events to update chat list snippet / unread markers
+    // Listen to WebSocket events
     useEffect(() => {
         if (lastMessage) {
             if (lastMessage.type === 'receive_message') {
                 setChats(prev => {
-                    let updated = [...prev];
-                    const chatIdx = updated.findIndex(c => c.chat_id === lastMessage.chat_id);
+                    const updated = [...prev];
+
+                    const chatIdx = updated.findIndex(
+                        c => c.chat_id === lastMessage.chat_id
+                    );
+
                     if (chatIdx > -1) {
-                        updated[chatIdx].last_message = {
-                            text: lastMessage.text,
-                            timestamp: lastMessage.timestamp,
-                            sender_is_me: false,
+                        updated[chatIdx] = {
+                            ...updated[chatIdx],
+                            last_message: {
+                                text: lastMessage.text,
+                                timestamp: lastMessage.timestamp,
+                                sender_is_me: false,
+                            },
+                            unread_count:
+                                activeChat?.chat_id !== lastMessage.chat_id
+                                    ? (updated[chatIdx].unread_count || 0) + 1
+                                    : 0,
                         };
-                        if (activeChat?.chat_id !== lastMessage.chat_id) {
-                            updated[chatIdx].unread_count += 1;
-                        }
-                        // Move to top
+
+                        // Move updated chat to the top
                         const [chat] = updated.splice(chatIdx, 1);
                         updated.unshift(chat);
                     } else {
-                        // New chat arrived; reload chats
+                        // Reload if a new chat arrives
                         loadInitialData();
                     }
+
                     return updated;
                 });
             } else if (lastMessage.type === 'message_sent_ack') {
-                // Update timestamp to true sent time
                 loadInitialData();
             }
         }
     }, [lastMessage, activeChat]);
 
+    // Select a chat or clear selection for mobile back navigation
     const selectChat = (chat) => {
         setActiveChat(chat);
-        // Optimistically reset unread counts
-        setChats(prev => prev.map(c => c.chat_id === chat.chat_id ? { ...c, unread_count: 0 } : c));
+
+        // If chat is null, return to the chat list
+        if (!chat) {
+            return;
+        }
+
+        // Reset unread count when opening a conversation
+        setChats(prev =>
+            prev.map(c =>
+                c.chat_id === chat.chat_id
+                    ? { ...c, unread_count: 0 }
+                    : c
+            )
+        );
     };
 
-    // Start a new 1-to-1 chat with a contact and auto-select it
+    // Start a new chat
     const startChat = async (contactUserId) => {
         try {
             const chatId = await chatService.startChat(contactUserId);
-            // Reload to get the full chat object
+
+            // Reload chats to get the complete chat object
             const chatData = await chatService.getChats();
             setChats(chatData);
-            // Select the newly created chat
-            const newChat = chatData.find(c => c.chat_id === chatId);
-            if (newChat) setActiveChat(newChat);
+
+            // Automatically open the new conversation
+            const newChat = chatData.find(
+                c => c.chat_id === chatId
+            );
+
+            if (newChat) {
+                selectChat(newChat);
+            }
+
             return chatId;
         } catch (err) {
             console.error('Failed to start chat:', err);
@@ -81,15 +115,19 @@ export const ChatProvider = ({ children }) => {
     };
 
     return (
-        <ChatContext.Provider value={{
-            chats,
-            activeChat,
-            selectChat,
-            startChat,
-            contacts,
-            refreshChats: loadInitialData
-        }}>
+        <ChatContext.Provider
+            value={{
+                chats,
+                activeChat,
+                selectChat,
+                startChat,
+                contacts,
+                refreshChats: loadInitialData,
+            }}
+        >
             {children}
         </ChatContext.Provider>
     );
 };
+
+export default ChatContext;
